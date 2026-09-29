@@ -1,0 +1,29 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# Database & Environment
+*.db
+*.sqlite
+.env
+.env.local
+
+# IDEs & System
+.idea/
+.vscode/
+*.swp
+.DS_Store
