@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "noreply@digiicampus.com"
 
+    # Celery / Redis Background Processing
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
+
+    # Worker Intervals (seconds)
+    ESCALATION_WORKER_INTERVAL_SECONDS: int = 60
+    EMAIL_OUTBOX_INTERVAL_SECONDS: int = 30
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -64,6 +64,71 @@ def get_teacher_dispute_detail(
     return dispute
 
 
+@router.patch("/disputes/{dispute_id}/start-review", response_model=DisputeDetailOut)
+def start_dispute_review(
+    dispute_id: int,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    """
+    Teacher acknowledges receipt of a dispute and marks it IN_REVIEW.
+    This signals the student that the dispute is being actively examined.
+    Only transitions from OPEN -> IN_REVIEW.
+    """
+    dispute = db.query(Dispute).filter(
+        Dispute.id == dispute_id,
+        Dispute.current_owner_id == current_user.id
+    ).with_for_update().first()
+
+    if not dispute:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dispute not found or you are not the assigned owner"
+        )
+
+    if dispute.status != DisputeStatus.OPEN:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Only OPEN disputes can be moved to IN_REVIEW. Current status: {dispute.status.value}"
+        )
+
+    try:
+        prev_status = dispute.status
+        dispute.status = DisputeStatus.IN_REVIEW
+
+        event = DisputeEvent(
+            dispute_id=dispute.id,
+            actor_id=current_user.id,
+            event_type=DisputeEventType.DISPUTE_REVIEWED,
+            previous_status=prev_status,
+            new_status=DisputeStatus.IN_REVIEW,
+            previous_owner_id=current_user.id,
+            new_owner_id=current_user.id,
+            message=f"Dispute marked IN_REVIEW by teacher {current_user.name}. Actively being examined."
+        )
+        db.add(event)
+
+        create_notification(
+            db=db,
+            recipient_id=dispute.student_id,
+            dispute_id=dispute.id,
+            type=NotificationType.DISPUTE_ASSIGNED,
+            title="Dispute Under Review",
+            message=f"Prof. {current_user.name} has acknowledged your dispute #{dispute.id} and is now reviewing it."
+        )
+
+        db.commit()
+        db.refresh(dispute)
+        return dispute
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update dispute status: {str(e)}"
+        )
+
+
 @router.post("/disputes/{dispute_id}/approve", response_model=DisputeDetailOut)
 def approve_dispute(
     dispute_id: int,

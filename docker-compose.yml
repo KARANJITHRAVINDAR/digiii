@@ -18,6 +18,18 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: digiicampus_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   backend:
     build:
       context: ./backend
@@ -36,9 +48,17 @@ services:
       JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_in_production_1234567890}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@digiicampus.com}
     depends_on:
       mysql:
         condition: service_healthy
+    # Runs migrations and seed data automatically on startup
     command: >
       sh -c "alembic upgrade head && python seed.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
@@ -46,7 +66,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: digiicampus_worker
+    container_name: digiicampus_celery_worker
     restart: always
     environment:
       DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-Ks@Kbd23777}@mysql:3306/${MYSQL_DATABASE:-digiicampus}
@@ -57,10 +77,49 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-digiicampus}
       JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_in_production_1234567890}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      ESCALATION_WORKER_INTERVAL_SECONDS: ${ESCALATION_WORKER_INTERVAL_SECONDS:-60}
+      EMAIL_OUTBOX_INTERVAL_SECONDS: ${EMAIL_OUTBOX_INTERVAL_SECONDS:-30}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-noreply@digiicampus.com}
     depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       backend:
         condition: service_started
-    command: python worker.py
+    command: celery -A app.celery_app.celery_app worker --loglevel=info --concurrency=2
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: digiicampus_celery_beat
+    restart: always
+    environment:
+      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD:-Ks@Kbd23777}@mysql:3306/${MYSQL_DATABASE:-digiicampus}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-Ks@Kbd23777}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-digiicampus}
+      JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_change_in_production_1234567890}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      ESCALATION_WORKER_INTERVAL_SECONDS: ${ESCALATION_WORKER_INTERVAL_SECONDS:-60}
+      EMAIL_OUTBOX_INTERVAL_SECONDS: ${EMAIL_OUTBOX_INTERVAL_SECONDS:-30}
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: celery -A app.celery_app.celery_app beat --loglevel=info
 
   frontend:
     build:
@@ -75,3 +134,4 @@ services:
 
 volumes:
   mysql_data:
+

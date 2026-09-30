@@ -222,3 +222,81 @@ def test_concurrency_double_resolution_fails(client, seed_attendance_data):
     second_res = client.post(f"/api/teacher/disputes/{dispute_id}/approve", headers={"Authorization": f"Bearer {teacher_token}"})
     assert second_res.status_code == 409
     assert "cannot be approved" in second_res.json()["detail"]
+
+
+def test_rejected_dispute_can_be_reraised(client, seed_attendance_data, db_session):
+    """
+    After a dispute is REJECTED (terminal state), the student must be able to raise
+    a new dispute for the same attendance record.
+    """
+    student = seed_attendance_data["cse_student"]
+    teacher = seed_attendance_data["math_teacher"]
+    att_record = seed_attendance_data["att_record"]
+
+    student_token = create_access_token(subject=student.id, role=student.role.value)
+    teacher_token = create_access_token(subject=teacher.id, role=teacher.role.value)
+
+    # 1. Student raises first dispute
+    res1 = client.post(
+        "/api/student/disputes",
+        headers={"Authorization": f"Bearer {student_token}"},
+        json={"attendance_record_id": att_record.id, "reason": "I was present - first attempt"}
+    )
+    assert res1.status_code == 201
+    dispute_id = res1.json()["id"]
+
+    # 2. Teacher rejects it
+    rej_res = client.post(
+        f"/api/teacher/disputes/{dispute_id}/reject",
+        headers={"Authorization": f"Bearer {teacher_token}"},
+        json={"reason": "Roll call confirms student was absent."}
+    )
+    assert rej_res.status_code == 200
+    assert rej_res.json()["status"] == "REJECTED"
+
+    # 3. Student raises a new dispute on the same record after rejection
+    res2 = client.post(
+        "/api/student/disputes",
+        headers={"Authorization": f"Bearer {student_token}"},
+        json={"attendance_record_id": att_record.id, "reason": "Re-raising with new evidence"}
+    )
+    assert res2.status_code == 201, f"Expected 201 but got {res2.status_code}: {res2.json()}"
+    assert res2.json()["status"] == "OPEN"
+
+
+def test_active_escalated_dispute_blocks_new_dispute(client, seed_attendance_data, db_session):
+    """
+    If a dispute is in ESCALATED_TO_HOD state (active), a new dispute on the
+    same attendance record must be rejected with 409.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.models.dispute import Dispute, DisputeStatus
+
+    student = seed_attendance_data["cse_student"]
+    teacher = seed_attendance_data["math_teacher"]
+    att_record = seed_attendance_data["att_record"]
+
+    # Directly insert an active escalated dispute into the DB
+    escalated_dispute = Dispute(
+        attendance_record_id=att_record.id,
+        student_id=student.id,
+        course_id=att_record.course_id,
+        teacher_id=teacher.id,
+        reason="Already escalated",
+        status=DisputeStatus.ESCALATED_TO_HOD,
+        current_owner_id=teacher.id,
+        due_at=datetime.now(timezone.utc) + timedelta(hours=48),
+    )
+    db_session.add(escalated_dispute)
+    db_session.commit()
+
+    # Student tries to raise another dispute — should be rejected
+    student_token = create_access_token(subject=student.id, role=student.role.value)
+    res = client.post(
+        "/api/student/disputes",
+        headers={"Authorization": f"Bearer {student_token}"},
+        json={"attendance_record_id": att_record.id, "reason": "Trying again while escalated"}
+    )
+    assert res.status_code == 409
+    assert "already exists" in res.json()["detail"]
+

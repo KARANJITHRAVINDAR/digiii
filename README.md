@@ -33,7 +33,7 @@ DigiCampus transforms what used to be a frustrating, unrecorded WhatsApp convers
 - **Course-Based Automatic Escalation**: If unresolved after 48h, the system automatically escalates to the **Course Department HOD**, then the **System Administrator**.
 - **Immutable Audit Ledger**: Every approval, rejection reason, and attendance correction is permanently preserved in versioned logs.
 
-> **Implementation Note:** In-app alerts, transactional email queuing, SMTP delivery, and retry workers are fully implemented in this repository. WhatsApp and SMS delivery channels are architecturally supported for future integrations requiring third-party institutional gateway credentials.
+> **Implementation Note:** In-app alerts, transactional email queuing, SMTP delivery, and Celery-based retry workers are fully implemented in this repository. WhatsApp and SMS delivery channels are architecturally supported for future integrations requiring third-party institutional gateway credentials.
 
 ---
 
@@ -121,7 +121,53 @@ graph TD
 
 ---
 
-## 🔔 6. Notification Architecture
+## ⚙️ 6. Background Processing Architecture
+
+Periodic background tasks (SLA escalation sweeps, email outbox processing) are driven by **Celery + Redis + Celery Beat** — not by FastAPI.
+
+```
+FastAPI (HTTP requests only)
+      |
+      v
+    MySQL
+
+Celery Beat (scheduler)
+      |
+      v
+    Redis (broker)
+      |
+      v
+Celery Worker (task execution)
+      |
+      +---------> MySQL (dispute state, audit events)
+      +---------> SMTP Server (email delivery)
+```
+
+| Service | Responsibility |
+|:---|:---|
+| **FastAPI** | Serves HTTP API requests; creates DB transactions; admin manual trigger still available |
+| **Redis** | Celery broker (DB 0) and result backend (DB 1); no application data stored in Redis |
+| **Celery Beat** | Runs in its own container; enqueues periodic tasks on schedule |
+| **Celery Worker** | Executes `process_sla_escalations` and `process_email_outbox_task` tasks |
+| **MySQL** | Only persistent application data store |
+| **SMTP** | External email delivery (optional; unconfigured = outbox entries retained) |
+
+### Default Schedule (configurable via environment variables)
+
+| Task | Default Interval | Environment Variable |
+|:---|:---|:---|
+| SLA Escalation Sweep | Every 60 seconds | `ESCALATION_WORKER_INTERVAL_SECONDS` |
+| Email Outbox Processing | Every 30 seconds | `EMAIL_OUTBOX_INTERVAL_SECONDS` |
+
+### Idempotency Guarantee
+All background tasks wrap the existing `process_overdue_escalations()` and `process_email_outbox()` service functions. These functions:
+- Use `SELECT ... FOR UPDATE` row locking to prevent race conditions
+- Are idempotent: running twice produces the same result
+- Do not duplicate dispute events, notifications, or ownership changes
+
+---
+
+## 🔔 7. Notification Architecture
 
 When an attendance record is submitted as `ABSENT`:
 
@@ -151,7 +197,7 @@ The notification workflow is asynchronous for email delivery, preventing externa
 
 ---
 
-## 🛡️ 7. Security, RBAC & Hardening Features
+## 🛡️ 8. Security, RBAC & Hardening Features
 
 - **Authoritative JWT Authentication**: Cryptographic token verification on all protected endpoints with `HS256` signatures.
 - **Server-Side RBAC**: Strict role enforcement across all routes (`STUDENT`, `TEACHER`, `HOD`, `ADMIN`). Frontend state is never trusted as authentication.
@@ -168,7 +214,7 @@ The notification workflow is asynchronous for email delivery, preventing externa
 
 ---
 
-## 👥 8. Role Capabilities & Portals
+## 👥 9. Role Capabilities & Portals
 
 | Role | Responsibilities | Key Portal Pages |
 | :--- | :--- | :--- |
@@ -179,7 +225,7 @@ The notification workflow is asynchronous for email delivery, preventing externa
 
 ---
 
-## 🔑 9. Evaluation Demo Accounts
+## 🔑 10. Evaluation Demo Accounts
 
 Pre-seeded credentials for evaluators (passwords hashed with `bcrypt`):
 
@@ -194,26 +240,31 @@ Pre-seeded credentials for evaluators (passwords hashed with `bcrypt`):
 
 ---
 
-## 🚀 10. Fresh Clone & Setup Instructions
+## 🚀 11. Fresh Clone & Setup Instructions
 
 ### Prerequisites
 - Docker & Docker Compose (or Python 3.10+ and Node.js 18+ for local execution)
 - MySQL 8.0 (if running locally without Docker)
+- Redis 7 (if running locally without Docker)
 
 ### Option A: Running with Docker Compose (Recommended)
 
 From the root directory:
 
 ```bash
-# Build and start all 4 services (MySQL, FastAPI Backend, Background Worker, React Frontend)
+# Build and start all 6 services:
+# MySQL, Redis, FastAPI Backend, Celery Worker, Celery Beat, React Frontend
 docker compose up --build
 ```
+
+> **Seed Data**: Migrations (`alembic upgrade head`) and seed data (`python seed.py`) run **automatically** inside the backend container on startup. No manual steps are required. The seed script is idempotent — running it on an already-seeded database is safe.
 
 Services will be available at:
 - **Frontend Web Application**: [http://localhost:3000](http://localhost:3000)
 - **FastAPI REST API**: [http://localhost:8000](http://localhost:8000)
 - **Interactive Swagger Documentation**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **MySQL Database**: `localhost:3306`
+- **Redis**: `localhost:6379`
 
 ### Option B: Local Development Setup
 
@@ -242,7 +293,7 @@ npm run dev
 
 ---
 
-## 🧪 11. Automated Testing & Verification
+## 🧪 12. Automated Testing & Verification
 
 ### Running Backend Test Suite
 ```bash
@@ -261,7 +312,10 @@ pytest -v
 - tests/test_m3_production.py (4 tests passed)
 - tests/test_m5_security_and_hardening.py (5 tests passed)
 - tests/test_rbac.py (2 tests passed)
+- tests/test_celery_tasks.py (6 tests passed)
 ```
+
+Note: Tests use in-memory SQLite and do **not** require a running Redis instance.
 
 ### Running Frontend Production Build
 ```bash
@@ -281,7 +335,40 @@ dist/assets/index-BTr6NP_2.js   345.99 kB │ gzip: 97.99 kB
 
 ---
 
-## 🧭 12. Evaluator Step-by-Step Walkthrough
+## 🔌 13. API Examples
+
+### Login
+```bash
+curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "student.cse@digiicampus.com", "password": "student123"}'
+```
+
+### Raise a Dispute
+```bash
+# Replace <TOKEN> with the access_token from login, and <RECORD_ID> with the absent attendance record id
+curl -s -X POST http://localhost:8000/api/student/disputes \
+  -H "Authorization: Bearer <TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"attendance_record_id": <RECORD_ID>, "reason": "I attended the lecture in Hall B"}'
+```
+
+### Trigger SLA Escalation (Admin)
+```bash
+# Replace <ADMIN_TOKEN> with admin login token
+curl -s -X POST http://localhost:8000/api/admin/trigger-escalation \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+```
+
+### Process Email Outbox (Admin)
+```bash
+curl -s -X POST http://localhost:8000/api/admin/process-outbox \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+```
+
+---
+
+## 🧭 14. Evaluator Step-by-Step Walkthrough
 
 Follow this scenario to experience the complete end-to-end lifecycle:
 
@@ -316,7 +403,7 @@ Follow this scenario to experience the complete end-to-end lifecycle:
 
 ---
 
-## ⚠️ 13. Scope, Prototype Disclosures & Boundaries
+## ⚠️ 15. Scope, Prototype Disclosures & Boundaries
 
 - **Prototype Status**: This system is an independently engineered prototype built for the DigiCampus evaluation assignment.
 - **Implemented Notifications**: In-app notifications, transactional email outbox, retry worker, and alert center.
@@ -324,10 +411,11 @@ Follow this scenario to experience the complete end-to-end lifecycle:
 
 ---
 
-## 📄 14. Milestone Completion Summary (M1–M5)
+## 📄 16. Milestone Completion Summary (M1–M6)
 
 - **M1 (Foundation, JWT Auth, Database & RBAC)**: Completed & Verified.
 - **M2 (Dispute Management, Course Ownership & SLA Escalation)**: Completed & Verified.
 - **M3 (Production Hardening, Admin Operations & Notifications)**: Completed & Verified.
 - **M4 (Enterprise React Frontend & UX Design System)**: Completed & Verified.
 - **M5 (Security Hardening, Test Suite & Submission Readiness)**: Completed & Verified (32/32 tests passing, clean Vite build, Docker compose validated).
+- **M6 (Celery + Redis Background Processing, Final Hardening)**: Completed & Verified (40/40 tests passing, Celery Worker + Beat services added, duplicate dispute guards verified, credentials sanitized in .env.example).
