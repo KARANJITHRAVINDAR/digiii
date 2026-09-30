@@ -303,16 +303,17 @@ pytest -v
 
 **Verified Test Result**:
 ```text
-============================= 32 passed in 24.25s =============================
+============================= 50 passed in 26.43s =============================
 - tests/test_auth.py (5 tests passed)
 - tests/test_domain_relationships.py (2 tests passed)
 - tests/test_escalation_and_m2_workflows.py (5 tests passed)
 - tests/test_health.py (1 test passed)
-- tests/test_m2_disputes.py (8 tests passed)
+- tests/test_m2_disputes.py (10 tests passed)
 - tests/test_m3_production.py (4 tests passed)
 - tests/test_m5_security_and_hardening.py (5 tests passed)
 - tests/test_rbac.py (2 tests passed)
 - tests/test_celery_tasks.py (6 tests passed)
+- tests/test_additional_coverage.py (10 tests passed — teacher session marking, IN_REVIEW workflow, HOD reject, notification mark-all-read, admin audit log)
 ```
 
 Note: Tests use in-memory SQLite and do **not** require a running Redis instance.
@@ -417,5 +418,5 @@ Follow this scenario to experience the complete end-to-end lifecycle:
 - **M2 (Dispute Management, Course Ownership & SLA Escalation)**: Completed & Verified.
 - **M3 (Production Hardening, Admin Operations & Notifications)**: Completed & Verified.
 - **M4 (Enterprise React Frontend & UX Design System)**: Completed & Verified.
-- **M5 (Security Hardening, Test Suite & Submission Readiness)**: Completed & Verified (32/32 tests passing, clean Vite build, Docker compose validated).
-- **M6 (Celery + Redis Background Processing, Final Hardening)**: Completed & Verified (40/40 tests passing, Celery Worker + Beat services added, duplicate dispute guards verified, credentials sanitized in .env.example).
+- **M5 (Security Hardening, Test Suite & Submission Readiness)**: Completed & Verified (50 tests passing, clean Vite build, Docker Compose validated, exact dependency pinning).
+- **M6 (Celery + Redis Background Processing, Final Hardening)**: Completed & Verified (50 tests passing, Celery Worker + Beat services, IN_REVIEW workflow, DEPLOYMENT.md, start/stop scripts, credentials sanitized).
