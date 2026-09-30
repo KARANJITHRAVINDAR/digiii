@@ -6,6 +6,7 @@ import { Modal } from '../../components/Modal';
 import { LoadingSpinner } from '../../components/LoadingSpinner';
 import { ErrorState } from '../../components/ErrorState';
 import api from '../../services/api';
+import { getErrorMessage } from '../../utils/errors';
 
 export const StudentAttendance = () => {
   const [attendance, setAttendance] = useState([]);
@@ -39,7 +40,7 @@ export const StudentAttendance = () => {
       setAttendance(attRes.data);
       setCourses(courseRes.data);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load attendance records.');
+      setError(getErrorMessage(err, 'Failed to load attendance records.'));
     } finally {
       setLoading(false);
     }
@@ -60,8 +61,13 @@ export const StudentAttendance = () => {
 
   const handleRaiseDisputeSubmit = async (e) => {
     e.preventDefault();
-    if (!disputeReason.trim()) {
+    const reasonClean = disputeReason.trim();
+    if (!reasonClean) {
       setModalError('Please enter a specific reason for your dispute.');
+      return;
+    }
+    if (reasonClean.length < 5) {
+      setModalError('Dispute reason must be at least 5 characters long.');
       return;
     }
 
@@ -71,13 +77,13 @@ export const StudentAttendance = () => {
     try {
       await api.post('/api/student/disputes', {
         attendance_record_id: selectedRecord.id,
-        reason: disputeReason.trim(),
+        reason: reasonClean,
       });
       setSuccessMsg(`Dispute successfully filed for record #${selectedRecord.id}. Assigned to course teacher with 48h SLA.`);
       handleCloseDisputeModal();
       await fetchData();
     } catch (err) {
-      setModalError(err.response?.data?.detail || 'Failed to submit dispute.');
+      setModalError(getErrorMessage(err, 'Failed to submit dispute.'));
     } finally {
       setSubmitting(false);
     }
