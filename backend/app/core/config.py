@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     MYSQL_HOST: str = "localhost"
     MYSQL_PORT: int = 3306
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "Ks@Kbd23777"
+    MYSQL_PASSWORD: str = "rootpassword"
     MYSQL_DATABASE: str = "digiicampus"
     DATABASE_URL: Optional[str] = None
 
